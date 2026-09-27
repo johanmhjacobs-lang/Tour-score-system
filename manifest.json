@@ -1,0 +1,16 @@
+{
+  "name": "The Tour — AIC Ballito Cricket",
+  "short_name": "The Tour",
+  "description": "Scoring, duty roster and itinerary tracker for the AIC Ballito cricket tour.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#141010",
+  "theme_color": "#141010",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
