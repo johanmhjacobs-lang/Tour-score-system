@@ -895,6 +895,7 @@ const CATS = {
       {label:'Catch', pts:3},
       {label:'Run out', pts:4},
       {label:'Direct hit', pts:3},
+      {label:'Dropped catch', pts:-2, neg:true},
     ]
   },
   allround: {
@@ -915,14 +916,26 @@ const CATS = {
     label:'Off the field', award:null,
     actions:[
       {label:'On time', pts:1},
-      {label:'Kit &amp; prep ready', pts:1},
+      {label:'Kit & prep ready', pts:1},
       {label:'Room inspection pass', pts:1},
       {label:'Great attitude', pts:1},
       {label:'Off the pace', pts:-2, neg:true},
+      {label:'Late', pts:-5, neg:true},
+      {label:'Negative attitude', pts:-5, neg:true},
+      {label:'Lack of effort', pts:-2, neg:true},
     ]
   },
 };
 const CAT_ORDER = ['batting','bowling','fielding','allround','team','offfield'];
+const DEFAULT_POINTS = {taskPrimary:2, taskAssist:1, moment:5};
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function defaultActions(){
+  const o = {};
+  CAT_ORDER.forEach(k=>{ o[k] = CATS[k].actions.map(a=>({label:a.label, pts:a.pts})); });
+  return o;
+}
 
 /* ================= STATE ================= */
 let state = {
@@ -934,6 +947,8 @@ let state = {
   days: DEFAULT_DAYS.map(d=>({...d})),
   nextPlayerSeq: 1,
   nextDaySeq: DEFAULT_DAYS.length + 1,
+  actions: defaultActions(),
+  pointsConfig: Object.assign({}, DEFAULT_POINTS),
   scores: {},   // scores[day][playerId][catKey] = number
   moments: [],  // {id, day, playerId, text, ts}
   tasks: {},    // tasks[day] = [{id, name, assignedId, assistIds:[], done}]
@@ -975,8 +990,8 @@ function taskPointsForPlayer(pid, day){
   let pts = 0;
   tasks.forEach(t=>{
     if(!t.done) return;
-    if(t.assignedId === pid) pts += 2;
-    if(t.assistIds.includes(pid)) pts += 1;
+    if(t.assignedId === pid) pts += state.pointsConfig.taskPrimary;
+    if(t.assistIds.includes(pid)) pts += state.pointsConfig.taskAssist;
   });
   return pts;
 }
@@ -1085,6 +1100,8 @@ async function loadState(){
       state.tasks = parsed.tasks || {};
       state.itinerary = parsed.itinerary || {};
       if(parsed.settings) state.settings = Object.assign({}, state.settings, parsed.settings);
+      if(parsed.actions) CAT_ORDER.forEach(k=>{ if(Array.isArray(parsed.actions[k])) state.actions[k] = parsed.actions[k]; });
+      if(parsed.pointsConfig) state.pointsConfig = Object.assign({}, state.pointsConfig, parsed.pointsConfig);
       if(Array.isArray(parsed.players) && parsed.players.length) state.players = parsed.players;
       if(Array.isArray(parsed.days) && parsed.days.length) state.days = parsed.days;
       if(typeof parsed.nextPlayerSeq === 'number') state.nextPlayerSeq = parsed.nextPlayerSeq;
@@ -1104,7 +1121,8 @@ async function saveState(){
       tasks: state.tasks, itinerary: state.itinerary,
       settings: state.settings,
       players: state.players, days: state.days,
-      nextPlayerSeq: state.nextPlayerSeq, nextDaySeq: state.nextDaySeq
+      nextPlayerSeq: state.nextPlayerSeq, nextDaySeq: state.nextDaySeq,
+      actions: state.actions, pointsConfig: state.pointsConfig
     }));
   }catch(e){
     showToast("Couldn't save on this device");
@@ -1140,6 +1158,7 @@ function catTotal(pid, catKey, scope){
 function playerTotal(pid, scope){
   let total = 0;
   CAT_ORDER.forEach(c => total += catTotal(pid, c, scope));
+  total += momentCount(pid, scope) * state.pointsConfig.moment;
   return total;
 }
 function momentCount(pid, scope){
@@ -1149,7 +1168,7 @@ function rankPlayers(scope, metric){
   const rows = state.players.map(p=>{
     let val;
     if(metric === 'overall') val = playerTotal(p.id, scope);
-    else if(metric === 'moments') val = momentCount(p.id, scope) * 5;
+    else if(metric === 'moments') val = momentCount(p.id, scope) * state.pointsConfig.moment;
     else val = catTotal(p.id, metric, scope);
     return {p, val};
   });
@@ -1256,16 +1275,16 @@ function renderRoster(){
             </div>
           `);
           const grid = block.querySelector('.btn-grid');
-          cat.actions.forEach(a=>{
+          state.actions[catKey].forEach(a=>{
             const btn = el(`
-              <button class="pt-btn ${a.neg?'neg':''}">
-                <span>${a.label}</span>
+              <button class="pt-btn ${a.pts<0?'neg':''}">
+                <span>${esc(a.label)}</span>
                 <span class="pill">${a.pts>0?'+':''}${a.pts}</span>
               </button>
             `);
             btn.addEventListener('click', (ev)=>{
               addPoint(scope, p.id, catKey, a.pts);
-              const f = el(`<span class="float-pt ${a.neg?'neg':''}">${a.pts>0?'+':''}${a.pts}</span>`);
+              const f = el(`<span class="float-pt ${a.pts<0?'neg':''}">${a.pts>0?'+':''}${a.pts}</span>`);
               btn.appendChild(f);
               setTimeout(()=> f.remove(), 650);
               render();
@@ -1279,15 +1298,25 @@ function renderRoster(){
         // MVM flag button lives inside the panel too, for convenience
         const mvmBlock = el(`
           <div class="cat-block">
-            <div class="cat-title"><span>Moment of the match</span><span class="cat-sub">${momentCount(p.id, scope)*5} pts</span></div>
+            <div class="cat-title"><span>Moment of the match</span><span class="cat-sub">${momentCount(p.id, scope)*state.pointsConfig.moment} pts</span></div>
             <div class="btn-grid"></div>
           </div>
         `);
         const mvmGrid = mvmBlock.querySelector('.btn-grid');
-        const mvmBtn = el(`<button class="pt-btn mvm"><span>Flag a moment</span><span class="pill">+5</span></button>`);
+        const mvmBtn = el(`<button class="pt-btn mvm"><span>Flag a moment</span><span class="pill">+${state.pointsConfig.moment}</span></button>`);
         mvmBtn.addEventListener('click', ()=> openMomentModal(p.id, scope === 'tour' ? state.activeDay : scope));
         mvmGrid.appendChild(mvmBtn);
         inner.appendChild(mvmBlock);
+        const customBlock = el(`
+          <div class="cat-block">
+            <div class="cat-title"><span>Custom</span></div>
+            <div class="btn-grid"></div>
+          </div>
+        `);
+        const customBtn = el(`<button class="pt-btn"><span>Custom points</span><span class="pill">+/-</span></button>`);
+        customBtn.addEventListener('click', ()=> openCustomPointModal(p.id, scope));
+        customBlock.querySelector('.btn-grid').appendChild(customBtn);
+        inner.appendChild(customBlock);
         body.appendChild(inner);
       }
     }
@@ -1460,7 +1489,7 @@ function openMomentModal(presetPlayerId, presetDay){
 
   const actions = el(`<div class="modal-actions"></div>`);
   const cancelBtn = el(`<button class="modal-btn cancel">Cancel</button>`);
-  const confirmBtn = el(`<button class="modal-btn confirm">Flag it (+5)</button>`);
+  const confirmBtn = el(`<button class="modal-btn confirm">Flag it (+${state.pointsConfig.moment})</button>`);
   cancelBtn.addEventListener('click', closeModal);
   confirmBtn.addEventListener('click', ()=>{
     const pid = sheet.querySelector('#momPlayer').value;
@@ -1564,12 +1593,12 @@ function renderTasksSegment(){
           <select class="task-select assign-select"><option value="">Unassigned</option></select>
         </div>
         <div class="task-field">
-          <label>Assisting (+1 each when done)</label>
+          <label>Assisting (+${state.pointsConfig.taskAssist} each when done)</label>
           <div class="chip-row assist-chips"></div>
         </div>
         <div class="task-bottom">
           <button class="done-toggle ${t.done?'done':''}">${t.done ? 'Done ✓' : 'Mark done'}</button>
-          <div class="task-award-note">${t.done ? ('+2 ' + (state.players.find(p=>p.id===t.assignedId)||{name:'nobody'}).name + (t.assistIds.length ? ', +1 x'+t.assistIds.length+' assist' : '')) : 'No points yet'}</div>
+          <div class="task-award-note">${t.done ? ('+' + state.pointsConfig.taskPrimary + ' ' + (state.players.find(p=>p.id===t.assignedId)||{name:'nobody'}).name + (t.assistIds.length ? ', +' + state.pointsConfig.taskAssist + ' x'+t.assistIds.length+' assist' : '')) : 'No points yet'}</div>
         </div>
       </div>
     `);
@@ -1868,6 +1897,118 @@ async function exportCard(kind){
 }
 
 /* ================= SETTINGS ================= */
+function renderPointsSheet(){
+  const overlay = document.getElementById('modalOverlay');
+  const sheet = document.getElementById('modalSheet');
+  const prevScroll = sheet.scrollTop;
+  sheet.innerHTML = '';
+  sheet.appendChild(el(`<div class="modal-title">Points system</div>`));
+  sheet.appendChild(el(`<div class="hint" style="margin:-4px 0 14px;">Changes apply to points you award from now on. Points already given stay as they are. Use a minus sign for deductions.</div>`));
+
+  sheet.appendChild(el(`<div class="modal-label">Duties and moments</div>`));
+  [['taskPrimary','Duty: assigned player'],['taskAssist','Duty: each assist'],['moment','Moment of the match']].forEach(([key,label])=>{
+    const row = el(`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"><span style="flex:1;font-size:13px;">${label}</span><input type="number" step="1" class="modal-select" value="${state.pointsConfig[key]}" style="width:80px;flex:none;"/></div>`);
+    row.querySelector('input').addEventListener('change', (e)=>{
+      const v = Math.round(Number(e.target.value));
+      if(e.target.value !== '' && !isNaN(v)){ state.pointsConfig[key] = v; saveState(); render(); }
+      else e.target.value = state.pointsConfig[key];
+    });
+    sheet.appendChild(row);
+  });
+
+  CAT_ORDER.forEach(catKey=>{
+    sheet.appendChild(el(`<div class="modal-label" style="margin-top:16px;">${CATS[catKey].label}</div>`));
+    const list = state.actions[catKey];
+    list.forEach((a, idx)=>{
+      const row = el(`
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+          <input type="text" class="modal-select a-label" value="${esc(a.label)}" style="flex:1.6;min-width:0;"/>
+          <input type="number" step="1" class="modal-select a-pts" value="${a.pts}" style="width:68px;flex:none;"/>
+          <button class="task-remove" title="Remove">&times;</button>
+        </div>
+      `);
+      row.querySelector('.a-label').addEventListener('change', (e)=>{
+        const v = e.target.value.trim();
+        if(v){ a.label = v; saveState(); render(); } else e.target.value = a.label;
+      });
+      row.querySelector('.a-pts').addEventListener('change', (e)=>{
+        const v = Math.round(Number(e.target.value));
+        if(e.target.value !== '' && !isNaN(v)){ a.pts = v; saveState(); render(); }
+        else e.target.value = a.pts;
+      });
+      row.querySelector('.task-remove').addEventListener('click', ()=>{
+        list.splice(idx, 1);
+        saveState(); renderPointsSheet(); render();
+      });
+      sheet.appendChild(row);
+    });
+    const addRow = el(`
+      <div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px;">
+        <input type="text" class="modal-select new-label" placeholder="New custom point" style="flex:1.6;min-width:0;"/>
+        <input type="number" step="1" class="modal-select new-pts" value="1" style="width:68px;flex:none;"/>
+        <button class="export-btn" style="padding:0 14px;flex:none;">Add</button>
+      </div>
+    `);
+    addRow.querySelector('button').addEventListener('click', ()=>{
+      const label = addRow.querySelector('.new-label').value.trim();
+      const pts = Math.round(Number(addRow.querySelector('.new-pts').value));
+      if(!label){ showToast('Give the point a name'); return; }
+      if(isNaN(pts) || pts === 0){ showToast('Enter a points value'); return; }
+      list.push({label, pts});
+      saveState(); renderPointsSheet(); render();
+    });
+    sheet.appendChild(addRow);
+  });
+
+  const resetPts = el(`<button class="export-btn danger" style="width:100%;margin:18px 0 10px;">Reset points to defaults</button>`);
+  resetPts.addEventListener('click', ()=>{
+    if(confirm('Reset every point value and custom point back to the defaults? Points already awarded are not changed.')){
+      state.actions = defaultActions();
+      state.pointsConfig = Object.assign({}, DEFAULT_POINTS);
+      saveState(); renderPointsSheet(); render();
+    }
+  });
+  sheet.appendChild(resetPts);
+  const backBtn = el(`<button class="modal-btn cancel" style="width:100%;">Back to settings</button>`);
+  backBtn.addEventListener('click', renderSettingsSheet);
+  sheet.appendChild(backBtn);
+
+  overlay.classList.add('show');
+  sheet.scrollTop = prevScroll;
+}
+
+function openCustomPointModal(pid, day){
+  const p = state.players.find(x=>x.id===pid);
+  if(!p) return;
+  const overlay = document.getElementById('modalOverlay');
+  const sheet = document.getElementById('modalSheet');
+  sheet.innerHTML = '';
+  sheet.appendChild(el(`<div class="modal-title">Custom points: ${esc(p.name)}</div>`));
+
+  const catField = el(`<div class="modal-field"><label class="modal-label">Category</label><select class="modal-select" id="cpCat"></select></div>`);
+  CAT_ORDER.forEach(k=> catField.querySelector('select').appendChild(el(`<option value="${k}">${CATS[k].label}</option>`)));
+  sheet.appendChild(catField);
+
+  const ptsField = el(`<div class="modal-field"><label class="modal-label">Points (use a minus sign to deduct)</label><input type="number" step="1" class="modal-select" id="cpPts" value="1"/></div>`);
+  sheet.appendChild(ptsField);
+
+  const actions = el(`<div class="modal-actions"></div>`);
+  const cancelBtn = el(`<button class="modal-btn cancel">Cancel</button>`);
+  const confirmBtn = el(`<button class="modal-btn confirm">Add points</button>`);
+  cancelBtn.addEventListener('click', closeModal);
+  confirmBtn.addEventListener('click', ()=>{
+    const pts = Math.round(Number(sheet.querySelector('#cpPts').value));
+    if(isNaN(pts) || pts === 0){ showToast('Enter a points value'); return; }
+    addPoint(day, pid, sheet.querySelector('#cpCat').value, pts);
+    closeModal();
+    showToast((pts>0?'+':'') + pts + ' to ' + p.name.split(' ')[0]);
+    render();
+  });
+  actions.appendChild(cancelBtn); actions.appendChild(confirmBtn);
+  sheet.appendChild(actions);
+  overlay.classList.add('show');
+}
+
 function renderSettingsSheet(){
   const overlay = document.getElementById('modalOverlay');
   const sheet = document.getElementById('modalSheet');
@@ -1967,6 +2108,10 @@ function renderSettingsSheet(){
     }
   });
   sheet.appendChild(addPlayerRow);
+
+  const pointsBtn = el(`<button class="export-btn secondary" style="width:100%;margin-bottom:10px;">Edit points system</button>`);
+  pointsBtn.addEventListener('click', renderPointsSheet);
+  sheet.appendChild(pointsBtn);
 
   const resetBtn = el(`<button class="export-btn danger" style="width:100%;margin-bottom:10px;">Reset all scores</button>`);
   resetBtn.addEventListener('click', ()=>{
